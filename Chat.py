@@ -1,7 +1,7 @@
 import requests
 from pprint import pprint, pformat
 from oauth_pile import oauth_wrapper
-import pendulum, time
+import pendulum, time, json
 
 
 class Chat:
@@ -10,6 +10,7 @@ class Chat:
         self.name = 'youtube_stream'
         self.generate_auth()
         self.init_stream()
+        self.chat = {}
 
     def generate_auth(self):
         storage_name = "%s-oauth2.json" % self.name
@@ -37,6 +38,9 @@ class Chat:
         self.id = yt_response.json()['items'][0]['id']
         self.name = yt_response.json()['items'][0]['snippet']['title']
         self.chat_id = yt_response.json()['items'][0]['snippet']['liveChatId']
+        self.offset = 0
+        stream_url = f"https://www.youtube.com/watch?v={self.id}"
+        chat_send([("SYS", stream_url)])
 
     def list_all(self):
         params = {
@@ -51,19 +55,31 @@ class Chat:
                                      headers=headers)
         return chat_response.json()['items']
 
-    def get_updates(self, timestamp):
-        chat = self.list_all()
-        new_messages = [entry for entry in chat
-                        if pendulum.parse(entry['snippet']['publishedAt']) >
-                        timestamp]
-        return pendulum.now(), new_messages
+    # TODO refactor
+    def chat_update(self, raw_chat):
+        cleaned_chat = [{'name': entry['authorDetails']['displayName'],
+                         'text': entry['snippet']['displayMessage'],
+                         'timestamp': pendulum.parse(entry['snippet']['publishedAt'])}
+                        for entry in raw_chat]
+        for entry in cleaned_chat:
+            if entry['timestamp'] not in self.chat:
+                self.chat[entry['timestamp']] = {'sent': False,
+                                                 'entry': (entry['name'], entry['text'])}
+        unsent = [val['entry'] for val in self.chat.values() if not val['sent']]
+        if len(unsent) > 5:
+            self.chat = {k: {"sent": True, 'entry': v['entry']} for k, v in self.chat.items()}
+            return None
+        chat_send(unsent)
+        self.chat = {k: {"sent": True, 'entry': v['entry']} for k, v in self.chat.items()}
+        pass
 
+    def update_offset(self, timestamp, chat):
         pass
 
 
 def chat_send(cleaned_chat):
-    token = '571655900:AAEeOOOw5Uhr7MEmyUr1t0O1tmf_uZpYbI8'
-    url = 'https://api.telegram.org/bot' + token + '/sendMessage'
+    bot_token = '571655900:AAEeOOOw5Uhr7MEmyUr1t0O1tmf_uZpYbI8'
+    url = 'https://api.telegram.org/bot' + bot_token + '/sendMessage'
     headers = {'Content-Type': 'application/json'}
     global_chat_id = '41535069'
     for name, message in cleaned_chat:
@@ -81,7 +97,6 @@ def chat_send(cleaned_chat):
 if __name__ == '__main__':
     yt_chat = Chat()
     chat = yt_chat.list_all()
-    import json
 
     with open('chat.json', 'w') as chat_file:
         json.dump(chat, chat_file, indent=2)
@@ -89,12 +104,7 @@ if __name__ == '__main__':
                      'text': message['snippet']['displayMessage'], }
                     for message in chat]
     pprint(cleaned_chat)
-    timestamp = pendulum.now()
     while True:
-        timestamp, chat = yt_chat.get_updates(timestamp)
-        if chat:
-            cleaned_chat = [(message['authorDetails']['displayName'],
-                             message['snippet']['displayMessage'])
-                            for message in chat]
-            chat_send(cleaned_chat)
+        chat = yt_chat.list_all()
+        yt_chat.chat_update(chat)
         time.sleep(2)
